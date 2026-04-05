@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Brain Tumour Detection</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="page-shell">
+
+    <main class="layout">
+      <section class="card upload-card">
+        <div class="card-head">
+          <div>
+            <p class="section-label">Upload</p>
+            <h2>Choose an MRI image</h2>
+          </div>
+          <span class="status-pill idle" id="serviceStatus">Ready</span>
+        </div>
+
+        <form id="uploadForm">
+          <label class="dropzone" for="imageInput" id="dropzone">
+            <input id="imageInput" type="file" accept="image/*" hidden>
+            <span class="dropzone-title">Drop an image here or click to browse</span>
+            <span class="dropzone-text">PNG, JPG, or JPEG</span>
+          </label>
+
+          <div class="preview-wrap">
+            <img
+              id="imagePreview"
+              alt="Selected MRI preview"
+              src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+            >
+            <div class="preview-placeholder" id="previewPlaceholder">
+              Your uploaded image preview will appear here.
+            </div>
+          </div>
+
+          <button class="primary-button" id="submitButton" type="submit" disabled>
+            Analyze Image
+          </button>
+        </form>
+      </section>
+
+      <section class="card results-card">
+        <div class="card-head">
+          <div>
+            <p class="section-label">Result</p>
+            <h2>Prediction summary</h2>
+          </div>
+          <div class="loader hidden" id="loader"></div>
+        </div>
+
+        <div class="empty-state" id="emptyState">
+          Run an image through the model to view detection status, probability, and segmentation.
+        </div>
+
+        <div class="results hidden" id="resultsPanel">
+          <div class="result-strip">
+            <div class="metric-box highlight">
+              <span class="metric-label">Detection</span>
+              <span class="metric-value" id="detectionStatus">-</span>
+            </div>
+            <div class="metric-box">
+              <span class="metric-label">Tumour Probability</span>
+              <span class="metric-value" id="tumourProbability">-</span>
+            </div>
+            <div class="metric-box">
+              <span class="metric-label">Decision Confidence</span>
+              <span class="metric-value" id="decisionConfidence">-</span>
+            </div>
+          </div>
+
+          <div class="image-grid">
+            <div class="image-card">
+              <p class="image-title">Segmented Overlay</p>
+              <img id="segmentedImage" alt="Segmented tumour overlay">
+            </div>
+            <div class="image-card">
+              <p class="image-title">Predicted Mask</p>
+              <img id="maskImage" alt="Predicted binary mask">
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const uploadForm = document.getElementById("uploadForm");
+    const imageInput = document.getElementById("imageInput");
+    const imagePreview = document.getElementById("imagePreview");
+    const previewPlaceholder = document.getElementById("previewPlaceholder");
+    const submitButton = document.getElementById("submitButton");
+    const loader = document.getElementById("loader");
+    const emptyState = document.getElementById("emptyState");
+    const resultsPanel = document.getElementById("resultsPanel");
+    const serviceStatus = document.getElementById("serviceStatus");
+    const detectionStatus = document.getElementById("detectionStatus");
+    const tumourProbability = document.getElementById("tumourProbability");
+    const decisionConfidence = document.getElementById("decisionConfidence");
+    const segmentedImage = document.getElementById("segmentedImage");
+    const maskImage = document.getElementById("maskImage");
+    const dropzone = document.getElementById("dropzone");
+
+    let encodedImage = "";
+
+    function setStatus(label, mode) {
+      serviceStatus.textContent = label;
+      serviceStatus.className = `status-pill ${mode}`;
+    }
+
+    function toggleLoading(isLoading) {
+      loader.classList.toggle("hidden", !isLoading);
+      submitButton.disabled = isLoading || !encodedImage;
+      submitButton.textContent = isLoading ? "Analyzing..." : "Analyze Image";
+      if (isLoading) {
+        setStatus("Processing", "working");
+      }
+    }
+
+    function showPreview(dataUrl) {
+      encodedImage = dataUrl;
+      imagePreview.src = dataUrl;
+      imagePreview.classList.add("visible");
+      previewPlaceholder.classList.add("hidden");
+      submitButton.disabled = false;
+      setStatus("Ready", "idle");
+    }
+
+    function readFile(file) {
+      if (!file) {
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = () => showPreview(reader.result);
+      reader.readAsDataURL(file);
+    }
+
+    imageInput.addEventListener("change", (event) => {
+      readFile(event.target.files[0]);
+    });
+
+    ["dragenter", "dragover"].forEach((eventName) => {
+      dropzone.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        dropzone.classList.add("dragging");
+      });
+    });
+
+    ["dragleave", "drop"].forEach((eventName) => {
+      dropzone.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        dropzone.classList.remove("dragging");
+      });
+    });
+
+    dropzone.addEventListener("drop", (event) => {
+      const [file] = event.dataTransfer.files;
+      if (file) {
+        imageInput.files = event.dataTransfer.files;
+        readFile(file);
+      }
+    });
+
+    uploadForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!encodedImage) {
+        return;
+      }
+
+      toggleLoading(true);
+
+      try {
+        const response = await fetch("/predict", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ image_data: encodedImage })
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.detail || "Prediction failed.");
+        }
+
+        emptyState.classList.add("hidden");
+        resultsPanel.classList.remove("hidden");
+
+        detectionStatus.textContent = data.status;
+        tumourProbability.textContent = `${data.tumour_probability}%`;
+        decisionConfidence.textContent = `${data.confidence}%`;
+        segmentedImage.src = data.segmented_image;
+        maskImage.src = data.mask_image;
+
+        setStatus("Completed", data.status === "Detected" ? "alert" : "success");
+      } catch (error) {
+        emptyState.textContent = error.message;
+        emptyState.classList.remove("hidden");
+        resultsPanel.classList.add("hidden");
+        setStatus("Error", "alert");
+      } finally {
+        toggleLoading(false);
+      }
+    });
+  </script>
+</body>
+</html>
